@@ -21,4 +21,4 @@ fi
 python train.py    -s $dataset_folder -r ${scale}  -m output/${dataset_name} --config_file config/gaussian_dataset/train.json --train_split
 
 # Segmentation rendering using trained model
-python render.py -m output/${dataset_name} --num_classes 256 --images images
+# python render.py -m output/${dataset_names} --num_classes 256 --images images
