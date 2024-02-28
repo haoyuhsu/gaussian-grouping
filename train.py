@@ -28,13 +28,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
-    num_classes = dataset.num_classes
+    # num_classes = dataset.num_classes   # TODO: make sure this reflects the true number of classes
+    num_classes = scene.num_classes
     print("Num classes: ",num_classes)
     classifier = torch.nn.Conv2d(gaussians.num_objects, num_classes, kernel_size=1)
     cls_criterion = torch.nn.CrossEntropyLoss(reduction='none')
     cls_optimizer = torch.optim.Adam(classifier.parameters(), lr=5e-4)
     classifier.cuda()
     if checkpoint:
+        print("Loading checkpoint from", checkpoint)
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
 
@@ -86,6 +88,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Object Loss
         gt_obj = viewpoint_cam.objects.cuda().long()
         logits = classifier(objects)
+
         loss_obj = cls_criterion(logits.unsqueeze(0), gt_obj.unsqueeze(0)).squeeze().mean()
         loss_obj = loss_obj / torch.log(torch.tensor(num_classes))  # normalize to (0,1)
 
@@ -232,7 +235,7 @@ if __name__ == "__main__":
         exit(1)
 
     args.densify_until_iter = config.get("densify_until_iter", 15000)
-    args.num_classes = config.get("num_classes", 200)
+    # args.num_classes = config.get("num_classes", 200)   # export from command line or modified by dataset
     args.reg3d_interval = config.get("reg3d_interval", 2)
     args.reg3d_k = config.get("reg3d_k", 5)
     args.reg3d_lambda_val = config.get("reg3d_lambda_val", 2)

@@ -1,0 +1,6 @@
+*.pyc
+data/
+output/
+Tracking-Anything-with-DEVA/example
+Tracking-Anything-with-DEVA/saves
+submodules/

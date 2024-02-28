@@ -49,7 +49,7 @@ class GaussianModel:
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
         self._objects_dc = torch.empty(0)
-        self.num_objects = 16
+        self.num_objects = 16               # TODO: if this changed, also change the value defined in diff-gaussian-rasterization/cuda_rasterizer/config.h
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
@@ -75,24 +75,41 @@ class GaussianModel:
             self.spatial_lr_scale,
         )
     
+    # TODO: modify this to ensure error-free loading from original gaussian spaltting model
     def restore(self, model_args, training_args):
-        (self.active_sh_degree, 
-        self._xyz, 
-        self._features_dc, 
-        self._features_rest,
-        self._scaling, 
-        self._rotation, 
-        self._opacity,
-        self._objects_dc,
-        self.max_radii2D, 
-        xyz_gradient_accum, 
-        denom,
-        opt_dict, 
-        self.spatial_lr_scale) = model_args
+        if len(model_args) == 13:  # checkpoint with object features
+            (self.active_sh_degree, 
+            self._xyz, 
+            self._features_dc, 
+            self._features_rest,
+            self._scaling, 
+            self._rotation, 
+            self._opacity,
+            self._objects_dc,
+            self.max_radii2D, 
+            xyz_gradient_accum, 
+            denom,
+            opt_dict, 
+            self.spatial_lr_scale) = model_args
+        elif len(model_args) == 12:  # checkpoint without object features (original gaussian splatting)
+            (self.active_sh_degree, 
+            self._xyz, 
+            self._features_dc, 
+            self._features_rest,
+            self._scaling, 
+            self._rotation, 
+            self._opacity,
+            self.max_radii2D, 
+            xyz_gradient_accum, 
+            denom,
+            opt_dict, 
+            self.spatial_lr_scale) = model_args
+            # restore optimizer only when resuming training from original gaussian splatting model
+            # if not training_args.include_feature:
+            #     self.optimizer.load_state_dict(opt_dict)
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
-        self.optimizer.load_state_dict(opt_dict)
 
     @property
     def get_scaling(self):
@@ -136,7 +153,7 @@ class GaussianModel:
         features[:, 3:, 1:] = 0.0
 
         # random init obj_id now
-        fused_objects = RGB2SH(torch.rand((fused_point_cloud.shape[0],self.num_objects), device="cuda"))
+        fused_objects = RGB2SH(torch.rand((fused_point_cloud.shape[0], self.num_objects), device="cuda"))
         fused_objects = fused_objects[:,:,None]
 
         print("Number of points at initialisation : ", fused_point_cloud.shape[0])
@@ -161,6 +178,12 @@ class GaussianModel:
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+
+        # Finetune from original GS model, add object features
+        if self._objects_dc.shape[0] != self._xyz.shape[0]:
+            object_features = RGB2SH(torch.rand((self._xyz.shape[0], self.num_objects), device="cuda"))
+            object_features = object_features[:,:,None]
+            self._objects_dc = nn.Parameter(object_features.transpose(1, 2).contiguous().requires_grad_(True))
 
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},

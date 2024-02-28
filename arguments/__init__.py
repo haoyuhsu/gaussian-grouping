@@ -50,12 +50,14 @@ class ModelParams(ParamGroup):
         self._resolution = -1
         self._white_background = False
         self.data_device = "cuda"
-        self.eval = False
-        self.n_views = 100 
+        self.eval = False       # Not used
+        self.n_views = 100      # Not used
         self.random_init = False
         self.train_split = False
-        self._object_path = "object_mask"
-        self.num_classes = 200
+        self._object_path = "track_with_deva"
+        self.custom_traj_name = ""
+        self.object_name = None
+        self.num_classes = 200              # TODO: Should change based on the tracking results
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -89,6 +91,7 @@ class OptimizationParams(ParamGroup):
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
 
+        # Tune this to avoid out of memory errors
         self.reg3d_interval = 2
         self.reg3d_k = 5
         self.reg3d_lambda_val = 2

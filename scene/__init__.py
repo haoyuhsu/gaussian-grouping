@@ -26,13 +26,17 @@ class Scene:
         """b
         :param path: Path to colmap scene main folder.
         """
+        self.source_path = args.source_path
         self.model_path = args.model_path
         self.loaded_iter = None
         self.gaussians = gaussians
 
+        # Adjust search path if we are fine-tuning on specific tracking object
+        search_load_path = self.source_path if args.object_name is not None and not os.path.exists(os.path.join(self.model_path, 'point_cloud')) else self.model_path
+
         if load_iteration:
             if load_iteration == -1:
-                self.loaded_iter = searchForMaxIteration(os.path.join(self.model_path, "point_cloud"))
+                self.loaded_iter = searchForMaxIteration(os.path.join(search_load_path, "point_cloud"))
             else:
                 self.loaded_iter = load_iteration
             print("Loading trained model at iteration {}".format(self.loaded_iter))
@@ -45,6 +49,9 @@ class Scene:
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
+        elif os.path.exists(os.path.join(args.source_path, args.custom_traj_name + ".json")):
+            print("Found custom trajectory file, assuming custom data set!")
+            scene_info = sceneLoadTypeCallbacks["Custom"](args.source_path, args.custom_traj_name, args.images, args.object_path, args.object_name, self.loaded_iter)
         else:
             assert False, "Could not recognize scene type!"
 
@@ -75,18 +82,20 @@ class Scene:
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
 
         if self.loaded_iter:
-            if isinstance(self.loaded_iter,str):
+            if isinstance(self.loaded_iter, str):
                 print("edit load path", self.loaded_iter)
-                self.gaussians.load_ply(os.path.join(self.model_path,
-                                                            "point_cloud"+self.loaded_iter,
+                self.gaussians.load_ply(os.path.join(search_load_path,
+                                                            "point_cloud" + self.loaded_iter,
                                                             "point_cloud.ply"))
             else:
-                self.gaussians.load_ply(os.path.join(self.model_path,
+                self.gaussians.load_ply(os.path.join(search_load_path,
                                                             "point_cloud",
                                                             "iteration_" + str(self.loaded_iter),
                                                             "point_cloud.ply"))
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
+
+        self.num_classes = scene_info.num_classes
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))

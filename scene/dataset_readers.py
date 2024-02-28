@@ -39,6 +39,7 @@ class SceneInfo(NamedTuple):
     test_cameras: list
     nerf_normalization: dict
     ply_path: str
+    num_classes: int = 0
 
 def getNerfppNorm(cam_info):
     def get_center_and_diag(cam_centers):
@@ -309,7 +310,93 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
                            ply_path=ply_path)
     return scene_info
 
+
+def readObjectAnnotations(path, filenames, width, height):
+    ids = sorted([int(f) for f in os.listdir(path) if f.isdigit()])
+    num_ids = len(ids)
+    object_annotations = {}
+    for f_name in filenames:
+        obj_map = np.zeros((height, width), dtype=np.uint8)  # values 0~num_ids (0 is background)
+        for idx, id in enumerate(ids):
+            obj_path = os.path.join(path, str(id), f_name + '.png')
+            if os.path.exists(obj_path):
+                obj_map = np.where(np.array(Image.open(obj_path)) == 255, idx+1, obj_map)
+        object_annotations[f_name] = obj_map
+    return object_annotations, num_ids+1
+
+
+def readCustomSceneInfo(path, custom_traj_name, images, objects, object_name, loaded_iter=-1):
+
+    custom_traj_path = os.path.join(path, custom_traj_name + ".json")
+    custom_traj_folder = os.path.join(path, "custom_camera_path", custom_traj_name)
+
+    assert os.path.exists(custom_traj_path), "Custom trajectory file not found!"
+    assert os.path.exists(custom_traj_folder), "Custom trajectory folder not found!"
+
+    with open(custom_traj_path, 'r') as f:
+        custom_traj = json.load(f)
+
+    image_dir = "images" if images == None else images
+    object_dir = 'track_with_deva' if objects == None else objects
+
+    # get camera poses and intrinsics
+    fx, fy, cx, cy = custom_traj["fl_x"], custom_traj["fl_y"], custom_traj["cx"], custom_traj["cy"]
+    width, height = custom_traj["w"], custom_traj["h"]
+    c2w_dict = {}
+    for frame in custom_traj["frames"]:
+        c2w_dict[frame["filename"]] = np.array(frame["transform_matrix"])
+
+    # Load object annotations
+    object_annotations, num_classes = readObjectAnnotations(os.path.join(custom_traj_folder, object_dir, object_name), c2w_dict.keys(), width, height)
+
+    cam_infos = []
+    for idx, filename in enumerate(c2w_dict.keys()):
+        sys.stdout.write('\r')
+        # the exact output you're looking for:
+        sys.stdout.write("Reading camera {}/{}".format(idx+1, len(c2w_dict.keys())))
+        sys.stdout.flush()
+        c2w = c2w_dict[filename]
+        w2c = np.linalg.inv(c2w)
+        R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
+        T = w2c[:3, 3]
+        FovY = focal2fov(fy, height)
+        FovX = focal2fov(fx, width)
+        image_path = os.path.join(custom_traj_folder, image_dir, filename)
+        image_name = os.path.basename(image_path).split(".")[0]
+        image = Image.open(image_path) if os.path.exists(image_path) else None
+        objects = object_annotations[filename]
+        cam_info = CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
+                              image_path=image_path, image_name=image_name, width=width, height=height, objects=objects)
+        cam_infos.append(cam_info)
+    sys.stdout.write('\n')
+
+    train_cam_infos = cam_infos
+    test_cam_infos = []
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+
+    # ply_path = ""
+    ply_path = os.path.join(path, 'point_cloud', 'iteration_' + str(loaded_iter), 'point_cloud.ply')
+    if not os.path.exists(ply_path):
+        print("===== PLY checkpoint not found, using input.ply as fallback. =====")
+        ply_path = os.path.join(path, 'input.ply')
+
+    try:
+        pcd = fetchPly(ply_path)
+    except:
+        pcd = None
+
+    scene_info = SceneInfo(point_cloud=pcd,
+                           train_cameras=train_cam_infos,
+                           test_cameras=test_cam_infos,
+                           nerf_normalization=nerf_normalization,
+                           ply_path=ply_path,
+                           num_classes=num_classes)
+    return scene_info
+
+
+# TODO: write a new callback function for custom camera trajectory
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
-    "Blender" : readNerfSyntheticInfo
+    "Blender" : readNerfSyntheticInfo,
+    "Custom" : readCustomSceneInfo
 }
