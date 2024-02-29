@@ -56,7 +56,7 @@ class ModelParams(ParamGroup):
         self.train_split = False
         self._object_path = "track_with_deva"
         self.custom_traj_name = ""
-        self.object_name = None
+        self.object_name = ""
         self.num_classes = 200              # TODO: Should change based on the tracking results
         super().__init__(parser, "Loading Parameters", sentinel)
 

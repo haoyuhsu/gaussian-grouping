@@ -37,6 +37,8 @@ from utils.general_utils import PILtoTorch
 from PIL import Image
 from render import feature_to_rgb, id2rgb, visualize_obj
 
+import copy
+
 
 def customLoadCam(resolution, id, cam_info, resolution_scale=1.0, data_device="cuda"):
     orig_w, orig_h = cam_info.image.size
@@ -222,11 +224,49 @@ def extract_geometry(dataset : ModelParams, iteration : int, pipeline : Pipeline
 
         gaussians_features = gaussians._objects_dc
         gaussians_features = gaussians_features.permute(2, 0, 1).unsqueeze(0) # (n_gaussians, 1, num_objects) -> (1, num_objects, n_gaussians, 1)
-        labels = classifier(gaussians_features).squeeze(0).squeeze(-1).permute(1, 0)    # (1, num_classes, n_gaussians, 1) -> (n_gaussians, num_classes)
-        pred_obj = torch.argmax(labels, dim=1)
-        # count number of objects per class
-        print(torch.count_nonzero(pred_obj))
-        # print(torch.count_nonzero(labels, dim=1))
+        gaussians_labels = classifier(gaussians_features).squeeze(0).squeeze(-1).permute(1, 0)    # (1, num_classes, n_gaussians, 1) -> (n_gaussians, num_classes)
+        pred_obj_labels = torch.argmax(gaussians_labels, dim=1)  # (n_gaussians, num_classes) -> (n_gaussians)
+        
+        # Render the object segmentation mask for each object label (excluding 0 for background)
+        for obj_label in range(1, num_classes):
+
+            mask_gaussians = pred_obj_labels == obj_label
+            if mask_gaussians.nonzero().size(0) == 0:
+                continue
+
+            # masking out the object
+            filtered_gaussians = copy.deepcopy(gaussians)
+            filtered_gaussians._xyz = gaussians._xyz[mask_gaussians]
+            filtered_gaussians._features_dc = gaussians._features_dc[mask_gaussians]
+            filtered_gaussians._features_rest = gaussians._features_rest[mask_gaussians]
+            filtered_gaussians._scaling = gaussians._scaling[mask_gaussians]
+            filtered_gaussians._rotation = gaussians._rotation[mask_gaussians]
+            filtered_gaussians._opacity = gaussians._opacity[mask_gaussians]
+            filtered_gaussians._objects_dc = gaussians._objects_dc[mask_gaussians]
+
+            # render the object with custom camera trajectory
+            for idx, c2w in enumerate(tqdm(c2w_dict.values(), desc="Rendering progress")):
+                w2c = np.linalg.inv(c2w)
+                R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
+                T = w2c[:3, 3]
+                FovY = focal2fov(fy, h)
+                FovX = focal2fov(fx, w)
+                image = np.zeros((h, w, 4), dtype=np.uint8)
+                depth = np.zeros((h, w))
+                cam_info = CameraInfo(uid=1, R=R, T=T, FovY=FovY, FovX=FovX, image=Image.fromarray(image),
+                                    image_path=None, image_name='{0:05d}'.format(idx), width=w, height=h,
+                                    objects=None)
+                view = customLoadCam(-1, idx, cam_info)
+                # view = Camera(
+                #     colmap_id=1, R=R, T=T, 
+                #     FoVx=FovX, FoVy=FovY, image=torch.zeros(4, h, w), gt_alpha_mask=None, 
+                #     image_name='{0:05d}'.format(idx), uid=idx)
+                results = render(view, filtered_gaussians, pipeline, background)
+
+                # save rendered images
+                rgba_img = results["render"]
+                torchvision.utils.save_image(rgba_img, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+
 
 
 if __name__ == "__main__":

@@ -28,8 +28,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
-    # num_classes = dataset.num_classes   # TODO: make sure this reflects the true number of classes
-    num_classes = scene.num_classes
+    # num_classes = dataset.num_classes         # Use when segmenting all objects
+    num_classes = scene.num_classes         # Use when segmenting specific objects
     print("Num classes: ",num_classes)
     classifier = torch.nn.Conv2d(gaussians.num_objects, num_classes, kernel_size=1)
     cls_criterion = torch.nn.CrossEntropyLoss(reduction='none')

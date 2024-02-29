@@ -318,9 +318,10 @@ def readObjectAnnotations(path, filenames, width, height):
     for f_name in filenames:
         obj_map = np.zeros((height, width), dtype=np.uint8)  # values 0~num_ids (0 is background)
         for idx, id in enumerate(ids):
-            obj_path = os.path.join(path, str(id), f_name + '.png')
+            obj_path = os.path.join(path, str(id), f_name)
             if os.path.exists(obj_path):
-                obj_map = np.where(np.array(Image.open(obj_path)) == 255, idx+1, obj_map)
+                obj_img = np.array(Image.open(obj_path)).astype(np.uint8)
+                obj_map = np.where(np.all(obj_img == 255, axis=-1), idx+1, obj_map)
         object_annotations[f_name] = obj_map
     return object_annotations, num_ids+1
 

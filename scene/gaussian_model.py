@@ -110,6 +110,7 @@ class GaussianModel:
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
+        # self.optimizer.load_state_dict(opt_dict)
 
     @property
     def get_scaling(self):
@@ -179,7 +180,7 @@ class GaussianModel:
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
 
-        # Finetune from original GS model, add object features
+        # Finetune from original GS model, add object features (Only used for fintuning on specific objects)
         if self._objects_dc.shape[0] != self._xyz.shape[0]:
             object_features = RGB2SH(torch.rand((self._xyz.shape[0], self.num_objects), device="cuda"))
             object_features = object_features[:,:,None]
