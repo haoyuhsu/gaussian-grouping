@@ -186,6 +186,19 @@ class GaussianModel:
             object_features = object_features[:,:,None]
             self._objects_dc = nn.Parameter(object_features.transpose(1, 2).contiguous().requires_grad_(True))
 
+        def set_requires_grad(tensor, requires_grad):
+            """Returns a new tensor with the specified requires_grad setting."""
+            return tensor.detach().clone().requires_grad_(requires_grad)
+        
+        # Only objects_dc is optimized
+        self._xyz = nn.Parameter(set_requires_grad(self._xyz, True))
+        self._features_dc = nn.Parameter(set_requires_grad(self._features_dc, True))
+        self._features_rest = nn.Parameter(set_requires_grad(self._features_rest, True))
+        self._opacity = nn.Parameter(set_requires_grad(self._opacity, True))
+        self._scaling = nn.Parameter(set_requires_grad(self._scaling, True))
+        self._rotation = nn.Parameter(set_requires_grad(self._rotation, True))
+        self._objects_dc = nn.Parameter(set_requires_grad(self._objects_dc, True))
+
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
             {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
@@ -455,7 +468,9 @@ class GaussianModel:
 
         objects_dc = np.zeros((xyz.shape[0], self.num_objects, 1))
         for idx in range(self.num_objects):
-            objects_dc[:,idx,0] = np.asarray(plydata.elements[0]["obj_dc_"+str(idx)])
+            key = "obj_dc_" + str(idx)
+            if key in plydata.elements[0]:
+                objects_dc[:,idx,0] = np.asarray(plydata.elements[0][key])
 
         self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
         self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))

@@ -34,6 +34,8 @@ class Scene:
         # Adjust search path if we are fine-tuning on specific tracking object
         search_load_path = self.source_path if args.object_name is not None and not os.path.exists(os.path.join(self.model_path, 'point_cloud')) else self.model_path
 
+        print("Search Load Path: ", search_load_path)
+
         if load_iteration:
             if load_iteration == -1:
                 self.loaded_iter = searchForMaxIteration(os.path.join(search_load_path, "point_cloud"))
@@ -80,6 +82,8 @@ class Scene:
             self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
             print("Loading Test Cameras")
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
+
+        print("Loaded Iteration: ", self.loaded_iter)
 
         if self.loaded_iter:
             if isinstance(self.loaded_iter, str):

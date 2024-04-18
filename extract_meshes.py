@@ -39,6 +39,8 @@ from render import feature_to_rgb, id2rgb, visualize_obj
 
 import copy
 
+from edit_object_removal import points_inside_convex_hull
+
 
 def customLoadCam(resolution, id, cam_info, resolution_scale=1.0, data_device="cuda"):
     orig_w, orig_h = cam_info.image.size
@@ -123,35 +125,7 @@ def get_ray_directions(H, W, K, device='cpu', random=False, return_uv=False, fla
     return directions
 
 
-# @torch.cuda.amp.autocast(dtype=torch.float32)
-# def get_rays(directions, c2w):
-#     """
-#     Get ray origin and directions in world coordinate for all pixels in one image.
-#     Reference: https://www.scratchapixel.com/lessons/3d-basic-rendering/
-#                ray-tracing-generating-camera-rays/standard-coordinate-systems
-
-#     Inputs:
-#         directions: (N, 3) ray directions in camera coordinate
-#         c2w: (3, 4) or (N, 3, 4) transformation matrix from camera coordinate to world coordinate
-
-#     Outputs:
-#         rays_o: (N, 3), the origin of the rays in world coordinate
-#         rays_d: (N, 3), the direction of the rays in world coordinate
-#     """
-#     if c2w.ndim==2:
-#         # Rotate ray directions from camera coordinate to the world coordinate
-#         rays_d = directions @ c2w[:, :3].T
-#     else:
-#         rays_d = rearrange(directions, 'n c -> n 1 c') @ \
-#                  rearrange(c2w[..., :3], 'n a b -> n b a')
-#         rays_d = rearrange(rays_d, 'n 1 c -> n c')
-#     # The origin of all rays is the camera origin in world coordinate
-#     rays_o = c2w[..., 3].expand_as(rays_d)
-
-#     return rays_o, rays_d 
-
-
-def extract_geometry(dataset : ModelParams, iteration : int, pipeline : PipelineParams, custom_traj_name : str):
+def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline : PipelineParams, custom_traj_name : str, selected_obj_ids : int, removal_thresh : float):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
@@ -171,11 +145,6 @@ def extract_geometry(dataset : ModelParams, iteration : int, pipeline : Pipeline
         with open(os.path.join(custom_traj_folder, custom_traj_name + '.json'), 'r') as f:
             custom_traj = json.load(f)
 
-        render_path = os.path.join(dataset.model_path, "custom_camera_path", custom_traj_name, "images")
-        makedirs(render_path, exist_ok=True)
-        obj_render_path = os.path.join(dataset.model_path, "custom_camera_path", custom_traj_name, "object_images")
-        makedirs(obj_render_path, exist_ok=True)
-
         # get camera poses and intrinsics
         fx, fy, cx, cy = custom_traj["fl_x"], custom_traj["fl_y"], custom_traj["cx"], custom_traj["cy"]
         w, h = custom_traj["w"], custom_traj["h"]
@@ -185,87 +154,78 @@ def extract_geometry(dataset : ModelParams, iteration : int, pipeline : Pipeline
 
         c2w_dict = dict(sorted(c2w_dict.items()))
 
-        # render images
-        # for idx, c2w in enumerate(tqdm(c2w_dict.values(), desc="Rendering progress")):
-        #     w2c = np.linalg.inv(c2w)
-        #     R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
-        #     T = w2c[:3, 3]
-        #     FovY = focal2fov(fy, h)
-        #     FovX = focal2fov(fx, w)
-        #     image = np.zeros((h, w, 4), dtype=np.uint8)
-        #     depth = np.zeros((h, w))
-        #     cam_info = CameraInfo(uid=1, R=R, T=T, FovY=FovY, FovX=FovX, image=Image.fromarray(image),
-        #                       image_path=None, image_name='{0:05d}'.format(idx), width=w, height=h,
-        #                       objects=None)
-        #     view = customLoadCam(-1, idx, cam_info)
-        #     # view = Camera(
-        #     #     colmap_id=1, R=R, T=T, 
-        #     #     FoVx=FovX, FoVy=FovY, image=torch.zeros(4, h, w), gt_alpha_mask=None, 
-        #     #     image_name='{0:05d}'.format(idx), uid=idx)
-        #     results = render(view, gaussians, pipeline, background)
-
-        #     # save rendered images
-        #     rgba_img = results["render"]
-        #     torchvision.utils.save_image(rgba_img, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
-
-        #     # save instance segmentation masks
-        #     rendering_obj = results["render_object"]
-        #     logits = classifier(rendering_obj)
-        #     pred_obj = torch.argmax(logits,dim=0)
-        #     pred_obj_mask = visualize_obj(pred_obj.cpu().numpy().astype(np.uint8))
-        #     cv2.imwrite(os.path.join(obj_render_path, '{0:05d}'.format(idx) + ".png"), cv2.cvtColor(pred_obj_mask, cv2.COLOR_RGB2BGR))
-
-            # save depth images
-            # depth_raw = result["depth"].permute(1, 2, 0).cpu().numpy()
-            # depth = depth2img(depth_raw, scale=16)
-            # cv2.imwrite(os.path.join(depth_path, '{0:05d}'.format(idx) + ".png"), cv2.cvtColor(depth, cv2.COLOR_RGB2BGR))
-
-        # print("Rendering finished")
-
+        # get gaussians within selected object ids
+        selected_obj_ids = torch.tensor(selected_obj_ids).cuda()
         gaussians_features = gaussians._objects_dc
-        gaussians_features = gaussians_features.permute(2, 0, 1).unsqueeze(0) # (n_gaussians, 1, num_objects) -> (1, num_objects, n_gaussians, 1)
-        gaussians_labels = classifier(gaussians_features).squeeze(0).squeeze(-1).permute(1, 0)    # (1, num_classes, n_gaussians, 1) -> (n_gaussians, num_classes)
-        pred_obj_labels = torch.argmax(gaussians_labels, dim=1)  # (n_gaussians, num_classes) -> (n_gaussians)
+        gaussians_features = gaussians_features.permute(2, 0, 1)                       # (n_gaussians, 1, num_objects) -> (1, num_objects, n_gaussians, 1)
+        gaussians_labels = classifier(gaussians_features).squeeze(-1).permute(1, 0)    # (1, num_classes, n_gaussians, 1) -> (n_gaussians, num_classes)
+        pred_obj_labels = torch.argmax(gaussians_labels, dim=1)                        # (n_gaussians, num_classes) -> (n_gaussians)
+        mask3d = (pred_obj_labels == selected_obj_ids)
         
-        # Render the object segmentation mask for each object label (excluding 0 for background)
-        for obj_label in range(1, num_classes):
+        # Option: use for multiple objects case
+        # mask3d = torch.zeros_like(pred_obj_labels, dtype=torch.bool)
+        # for obj_id in selected_obj_ids:
+        #     mask3d = mask3d | (pred_obj_labels == obj_id)
+        
+        mask3d_convex = points_inside_convex_hull(gaussians._xyz.detach(), mask3d, outlier_factor=1.0)
+        mask3d = torch.logical_or(mask3d, mask3d_convex)
+        # mask3d = mask3d[:,None,None]
+        
+        # save the selected object gaussians for further usage
+        object_gaussians = copy.deepcopy(gaussians)
+        object_gaussians._xyz = gaussians._xyz[mask3d]
+        object_gaussians._features_dc = gaussians._features_dc[mask3d]
+        object_gaussians._features_rest = gaussians._features_rest[mask3d]
+        object_gaussians._scaling = gaussians._scaling[mask3d]
+        object_gaussians._rotation = gaussians._rotation[mask3d]
+        object_gaussians._opacity = gaussians._opacity[mask3d]
+        object_gaussians._objects_dc = gaussians._objects_dc[mask3d]
+        object_point_cloud_path = os.path.join(dataset.model_path, "point_cloud_removal", "object_id={}".format(selected_obj_ids))
+        makedirs(object_point_cloud_path, exist_ok=True)
+        print("Saving object point cloud to: ", object_point_cloud_path)
+        object_gaussians.save_ply(os.path.join(object_point_cloud_path, "object_point_cloud.ply"))
 
-            mask_gaussians = pred_obj_labels == obj_label
-            if mask_gaussians.nonzero().size(0) == 0:
-                continue
+        if mask3d.nonzero().size(0) == 0:
+            return
 
-            # masking out the object
-            filtered_gaussians = copy.deepcopy(gaussians)
-            filtered_gaussians._xyz = gaussians._xyz[mask_gaussians]
-            filtered_gaussians._features_dc = gaussians._features_dc[mask_gaussians]
-            filtered_gaussians._features_rest = gaussians._features_rest[mask_gaussians]
-            filtered_gaussians._scaling = gaussians._scaling[mask_gaussians]
-            filtered_gaussians._rotation = gaussians._rotation[mask_gaussians]
-            filtered_gaussians._opacity = gaussians._opacity[mask_gaussians]
-            filtered_gaussians._objects_dc = gaussians._objects_dc[mask_gaussians]
+        # save the remaining gaussians for further usage
+        mask3d = ~mask3d
+        gaussians._xyz = gaussians._xyz[mask3d]
+        gaussians._features_dc = gaussians._features_dc[mask3d]
+        gaussians._features_rest = gaussians._features_rest[mask3d]
+        gaussians._scaling = gaussians._scaling[mask3d]
+        gaussians._rotation = gaussians._rotation[mask3d]
+        gaussians._opacity = gaussians._opacity[mask3d]
+        gaussians._objects_dc = gaussians._objects_dc[mask3d]
+        print("Saving filtered point cloud to: ", object_point_cloud_path)
+        gaussians.save_ply(os.path.join(object_point_cloud_path, "filtered_point_cloud.ply"))
 
-            # render the object with custom camera trajectory
-            for idx, c2w in enumerate(tqdm(c2w_dict.values(), desc="Rendering progress")):
-                w2c = np.linalg.inv(c2w)
-                R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
-                T = w2c[:3, 3]
-                FovY = focal2fov(fy, h)
-                FovX = focal2fov(fx, w)
-                image = np.zeros((h, w, 4), dtype=np.uint8)
-                depth = np.zeros((h, w))
-                cam_info = CameraInfo(uid=1, R=R, T=T, FovY=FovY, FovX=FovX, image=Image.fromarray(image),
-                                    image_path=None, image_name='{0:05d}'.format(idx), width=w, height=h,
-                                    objects=None)
-                view = customLoadCam(-1, idx, cam_info)
-                # view = Camera(
-                #     colmap_id=1, R=R, T=T, 
-                #     FoVx=FovX, FoVy=FovY, image=torch.zeros(4, h, w), gt_alpha_mask=None, 
-                #     image_name='{0:05d}'.format(idx), uid=idx)
-                results = render(view, filtered_gaussians, pipeline, background)
+        render_path = os.path.join(dataset.model_path, "custom_camera_path", custom_traj_name, "images_removal_object_id={}".format(selected_obj_ids))
+        makedirs(render_path, exist_ok=True)
+        obj_render_path = os.path.join(dataset.model_path, "custom_camera_path", custom_traj_name, "images_object_id={}".format(selected_obj_ids))
+        makedirs(obj_render_path, exist_ok=True)
 
-                # save rendered images
-                rgba_img = results["render"]
-                torchvision.utils.save_image(rgba_img, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+        # render the object with custom camera trajectory
+        for idx, c2w in enumerate(tqdm(c2w_dict.values(), desc="Rendering progress")):
+            w2c = np.linalg.inv(c2w)
+            R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
+            T = w2c[:3, 3]
+            FovY = focal2fov(fy, h)
+            FovX = focal2fov(fx, w)
+            image = np.zeros((h, w, 4), dtype=np.uint8)
+            cam_info = CameraInfo(uid=1, R=R, T=T, FovY=FovY, FovX=FovX, image=Image.fromarray(image),
+                                image_path=None, image_name='{0:05d}'.format(idx), width=w, height=h,
+                                objects=None)
+            view = customLoadCam(-1, idx, cam_info)
+            # view = Camera(
+            #     colmap_id=1, R=R, T=T, 
+            #     FoVx=FovX, FoVy=FovY, image=torch.zeros(4, h, w), gt_alpha_mask=None, 
+            #     image_name='{0:05d}'.format(idx), uid=idx)
+            results = render(view, gaussians, pipeline, background)
+            torchvision.utils.save_image(results["render"], os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+
+            results = render(view, object_gaussians, pipeline, background)
+            torchvision.utils.save_image(results["render"], os.path.join(obj_render_path, '{0:05d}'.format(idx) + ".png"))
 
 
 
@@ -278,11 +238,13 @@ if __name__ == "__main__":
     parser.add_argument("--skip_train", action="store_true")
     parser.add_argument("--skip_test", action="store_true")
     parser.add_argument("--quiet", action="store_true")
-    # parser.add_argument("--custom_traj_name", default=None, type=str)
+    parser.add_argument("--load_iteration", type=int, default=0, help="Load a specific iteration from a checkpoint")
+    parser.add_argument("--selected_obj_ids", type=int, default=-1, help="Object ids to be removed")
+    parser.add_argument("--removal_thresh", type=float, default=0.5, help="Threshold for object removal")
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
 
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
-    extract_geometry(model.extract(args), args.iteration, pipeline.extract(args), args.custom_traj_name)
+    extract_geometry_and_render(model.extract(args), args.iteration, pipeline.extract(args), args.custom_traj_name, args.selected_obj_ids, args.removal_thresh)
