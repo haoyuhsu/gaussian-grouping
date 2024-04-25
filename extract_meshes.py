@@ -167,8 +167,9 @@ def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline
         # for obj_id in selected_obj_ids:
         #     mask3d = mask3d | (pred_obj_labels == obj_id)
         
-        mask3d_convex = points_inside_convex_hull(gaussians._xyz.detach(), mask3d, outlier_factor=1.0)
-        mask3d = torch.logical_or(mask3d, mask3d_convex)
+        mask3d_convex, mask3d_inlier = points_inside_convex_hull(gaussians._xyz.detach(), mask3d, outlier_factor=1.0)
+        mask3d = torch.logical_or(mask3d_inlier, mask3d_convex)
+        # mask3d = mask3d_convex
         # mask3d = mask3d[:,None,None]
         
         # save the selected object gaussians for further usage
@@ -182,28 +183,35 @@ def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline
         object_gaussians._objects_dc = gaussians._objects_dc[mask3d]
         object_point_cloud_path = os.path.join(dataset.model_path, "point_cloud_removal", "object_id={}".format(selected_obj_ids))
         makedirs(object_point_cloud_path, exist_ok=True)
-        print("Saving object point cloud to: ", object_point_cloud_path)
-        object_gaussians.save_ply(os.path.join(object_point_cloud_path, "object_point_cloud.ply"))
+        # print("Saving object point cloud to: ", object_point_cloud_path)
+        # object_gaussians.save_ply(os.path.join(object_point_cloud_path, "object_point_cloud.ply"))
 
         if mask3d.nonzero().size(0) == 0:
             return
 
         # save the remaining gaussians for further usage
-        mask3d = ~mask3d
-        gaussians._xyz = gaussians._xyz[mask3d]
-        gaussians._features_dc = gaussians._features_dc[mask3d]
-        gaussians._features_rest = gaussians._features_rest[mask3d]
-        gaussians._scaling = gaussians._scaling[mask3d]
-        gaussians._rotation = gaussians._rotation[mask3d]
-        gaussians._opacity = gaussians._opacity[mask3d]
-        gaussians._objects_dc = gaussians._objects_dc[mask3d]
-        print("Saving filtered point cloud to: ", object_point_cloud_path)
-        gaussians.save_ply(os.path.join(object_point_cloud_path, "filtered_point_cloud.ply"))
+        non_mask3d = ~mask3d
+        object_removal_gaussians = copy.deepcopy(gaussians)
+        object_removal_gaussians._xyz = gaussians._xyz[non_mask3d]
+        object_removal_gaussians._features_dc = gaussians._features_dc[non_mask3d]
+        object_removal_gaussians._features_rest = gaussians._features_rest[non_mask3d]
+        object_removal_gaussians._scaling = gaussians._scaling[non_mask3d]
+        object_removal_gaussians._rotation = gaussians._rotation[non_mask3d]
+        object_removal_gaussians._opacity = gaussians._opacity[non_mask3d]
+        object_removal_gaussians._objects_dc = gaussians._objects_dc[non_mask3d]
+        # print("Saving filtered point cloud to: ", object_point_cloud_path)
+        # object_removal_gaussians.save_ply(os.path.join(object_point_cloud_path, "filtered_point_cloud.ply"))
+
+        # recomposition of the scene (ex: plus 0.25 in x-axis for object gaussians)
+        recomposed_gaussians = copy.deepcopy(gaussians)
+        recomposed_gaussians._xyz[mask3d] = gaussians._xyz[mask3d] + torch.tensor([0.25, 0, 0], dtype=torch.float32, device="cuda")
 
         render_path = os.path.join(dataset.model_path, "custom_camera_path", custom_traj_name, "images_removal_object_id={}".format(selected_obj_ids))
         makedirs(render_path, exist_ok=True)
         obj_render_path = os.path.join(dataset.model_path, "custom_camera_path", custom_traj_name, "images_object_id={}".format(selected_obj_ids))
         makedirs(obj_render_path, exist_ok=True)
+        recomposed_render_path = os.path.join(dataset.model_path, "custom_camera_path", custom_traj_name, "images_recomposited_object_id={}".format(selected_obj_ids))
+        makedirs(recomposed_render_path, exist_ok=True)
 
         # render the object with custom camera trajectory
         for idx, c2w in enumerate(tqdm(c2w_dict.values(), desc="Rendering progress")):
@@ -221,12 +229,15 @@ def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline
             #     colmap_id=1, R=R, T=T, 
             #     FoVx=FovX, FoVy=FovY, image=torch.zeros(4, h, w), gt_alpha_mask=None, 
             #     image_name='{0:05d}'.format(idx), uid=idx)
-            results = render(view, gaussians, pipeline, background)
+
+            results = render(view, object_removal_gaussians, pipeline, background)
             torchvision.utils.save_image(results["render"], os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
 
             results = render(view, object_gaussians, pipeline, background)
             torchvision.utils.save_image(results["render"], os.path.join(obj_render_path, '{0:05d}'.format(idx) + ".png"))
 
+            results = render(view, recomposed_gaussians, pipeline, background)
+            torchvision.utils.save_image(results["render"], os.path.join(recomposed_render_path, '{0:05d}'.format(idx) + ".png"))
 
 
 if __name__ == "__main__":

@@ -58,6 +58,7 @@ class ModelParams(ParamGroup):
         self.custom_traj_name = ""
         self.object_name = ""
         self.num_classes = 200              # TODO: Should change based on the tracking results
+        self.custom_resolution = 1
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

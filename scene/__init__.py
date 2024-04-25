@@ -53,7 +53,7 @@ class Scene:
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
         elif os.path.exists(os.path.join(args.source_path, args.custom_traj_name + ".json")):
             print("Found custom trajectory file, assuming custom data set!")
-            scene_info = sceneLoadTypeCallbacks["Custom"](args.source_path, args.custom_traj_name, args.images, args.object_path, args.object_name, self.loaded_iter)
+            scene_info = sceneLoadTypeCallbacks["Custom"](args.source_path, args.custom_traj_name, args.images, args.object_path, args.object_name, self.loaded_iter, args.custom_resolution)
         else:
             assert False, "Could not recognize scene type!"
 

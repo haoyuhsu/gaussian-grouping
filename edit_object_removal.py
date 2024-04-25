@@ -28,7 +28,7 @@ from sklearn.decomposition import PCA
 from scipy.spatial import ConvexHull, Delaunay
 from render import feature_to_rgb, visualize_obj
 
-def points_inside_convex_hull(point_cloud, mask, remove_outliers=True, outlier_factor=1.0):
+def points_inside_convex_hull(point_cloud, mask, remove_outliers=True, outlier_factor=1.5, tol=None):
     """
     Given a point cloud and a mask indicating a subset of points, this function computes the convex hull of the 
     subset of points and then identifies all points from the original point cloud that are inside this convex hull.
@@ -47,26 +47,44 @@ def points_inside_convex_hull(point_cloud, mask, remove_outliers=True, outlier_f
     # Extract the masked points from the point cloud
     masked_points = point_cloud[mask].cpu().numpy()
 
+    # Initialize a full-size non-outlier mask with all False values
+    extended_non_outlier_mask = torch.zeros(point_cloud.shape[0], dtype=torch.bool, device='cuda')
+
     # Remove outliers if the option is selected
     if remove_outliers:
-        Q1 = np.percentile(masked_points, 25, axis=0)
-        Q3 = np.percentile(masked_points, 75, axis=0)
-        IQR = Q3 - Q1
-        outlier_mask = (masked_points < (Q1 - outlier_factor * IQR)) | (masked_points > (Q3 + outlier_factor * IQR))
-        filtered_masked_points = masked_points[~np.any(outlier_mask, axis=1)]
+
+        ##### Option 1: use IQR method to remove outliers #####
+        # Q1 = np.percentile(masked_points, 25, axis=0)
+        # Q3 = np.percentile(masked_points, 75, axis=0)
+        # IQR = Q3 - Q1
+        # outlier_mask = (masked_points < (Q1 - outlier_factor * IQR)) | (masked_points > (Q3 + outlier_factor * IQR))
+        # print("lower bound: ", Q1 - outlier_factor * IQR)
+        # print("upper bound: ", Q3 + outlier_factor * IQR)
+        # non_outlier_mask = ~np.any(outlier_mask, axis=1)
+        
+        ##### Option 2: use DBSCAN to remove outliers ##### <-- not working well
+        # from sklearn.cluster import DBSCAN
+        # clustering = DBSCAN(eps=0.1, min_samples=10).fit(masked_points)
+        # outlier_mask = clustering.labels_ == -1
+        # non_outlier_mask = ~outlier_mask
+
+        filtered_masked_points = masked_points[non_outlier_mask]
     else:
         filtered_masked_points = masked_points
+
+    # Update the extended non-outlier mask
+    extended_non_outlier_mask[mask] = torch.from_numpy(non_outlier_mask).cuda()
 
     # Compute the Delaunay triangulation of the filtered masked points
     delaunay = Delaunay(filtered_masked_points)
 
-    # Determine which points from the original point cloud are inside the convex hull
-    points_inside_hull_mask = delaunay.find_simplex(point_cloud.cpu().numpy()) >= 0
+    # Determine which points from the original point cloud are inside the convex hull (add tolerance)
+    points_inside_hull_mask = delaunay.find_simplex(point_cloud.cpu().numpy(), tol=tol) >= 0
 
     # Convert the numpy mask back to a torch tensor and return
     inside_hull_tensor_mask = torch.tensor(points_inside_hull_mask, device='cuda')
 
-    return inside_hull_tensor_mask
+    return inside_hull_tensor_mask, extended_non_outlier_mask
 
 def removal_setup(opt, model_path, iteration, views, gaussians, pipeline, background, classifier, selected_obj_ids, cameras_extent, removal_thresh):
     selected_obj_ids = torch.tensor(selected_obj_ids).cuda()

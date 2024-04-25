@@ -326,7 +326,7 @@ def readObjectAnnotations(path, filenames, width, height):
     return object_annotations, num_ids+1
 
 
-def readCustomSceneInfo(path, custom_traj_name, images, objects, object_name, loaded_iter=-1):
+def readCustomSceneInfo(path, custom_traj_name, images, objects, object_name, loaded_iter=-1, resolution=-1):
 
     custom_traj_path = os.path.join(path, custom_traj_name + ".json")
     custom_traj_folder = os.path.join(path, "custom_camera_path", custom_traj_name)
@@ -347,8 +347,14 @@ def readCustomSceneInfo(path, custom_traj_name, images, objects, object_name, lo
     for frame in custom_traj["frames"]:
         c2w_dict[frame["filename"]] = np.array(frame["transform_matrix"])
 
+    if resolution in [1, 2, 4, 8]:
+        object_img_width, object_img_height = int(width / resolution), int(height / resolution)
+        width, height = int(width / resolution), int(height / resolution)  # this part will be rescale at loadCam() in camera_utils.py
+        fx, fy = fx / resolution, fy / resolution
+        cx, cy = cx / resolution, cy / resolution
+
     # Load object annotations
-    object_annotations, num_classes = readObjectAnnotations(os.path.join(custom_traj_folder, object_dir, object_name), c2w_dict.keys(), width, height)
+    object_annotations, num_classes = readObjectAnnotations(os.path.join(custom_traj_folder, object_dir, object_name), c2w_dict.keys(), object_img_width, object_img_height)
 
     cam_infos = []
     for idx, filename in enumerate(c2w_dict.keys()):
