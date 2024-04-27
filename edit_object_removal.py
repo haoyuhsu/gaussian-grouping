@@ -54,13 +54,13 @@ def points_inside_convex_hull(point_cloud, mask, remove_outliers=True, outlier_f
     if remove_outliers:
 
         ##### Option 1: use IQR method to remove outliers #####
-        # Q1 = np.percentile(masked_points, 25, axis=0)
-        # Q3 = np.percentile(masked_points, 75, axis=0)
-        # IQR = Q3 - Q1
-        # outlier_mask = (masked_points < (Q1 - outlier_factor * IQR)) | (masked_points > (Q3 + outlier_factor * IQR))
-        # print("lower bound: ", Q1 - outlier_factor * IQR)
-        # print("upper bound: ", Q3 + outlier_factor * IQR)
-        # non_outlier_mask = ~np.any(outlier_mask, axis=1)
+        Q1 = np.percentile(masked_points, 25, axis=0)
+        Q3 = np.percentile(masked_points, 75, axis=0)
+        IQR = Q3 - Q1
+        outlier_mask = (masked_points < (Q1 - outlier_factor * IQR)) | (masked_points > (Q3 + outlier_factor * IQR))
+        print("lower bound: ", Q1 - outlier_factor * IQR)
+        print("upper bound: ", Q3 + outlier_factor * IQR)
+        non_outlier_mask = ~np.any(outlier_mask, axis=1)
         
         ##### Option 2: use DBSCAN to remove outliers ##### <-- not working well
         # from sklearn.cluster import DBSCAN
