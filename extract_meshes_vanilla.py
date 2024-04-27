@@ -313,6 +313,11 @@ def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline
         mask3d = np.isin(triangle_ids, mask_triangles_idx)
         mask3d = torch.tensor(mask3d, dtype=torch.bool, device="cuda")
 
+        # save the convex hull meshes (TODO: might be blurry)
+        masked_mesh.export(os.path.join(dataset.model_path, "point_cloud_removal", "object_mesh.obj")) 
+        convex_hull_mesh = trimesh.Trimesh(vertices=convex_hull.vertices, faces=convex_hull.faces)
+        convex_hull_mesh.export(os.path.join(dataset.model_path, "point_cloud_removal", "object_convex_hull_mesh.obj"))
+
         # save the selected object gaussians for further usage
         object_gaussians = copy.deepcopy(gaussians)
         object_gaussians._xyz = gaussians._xyz[mask3d]
