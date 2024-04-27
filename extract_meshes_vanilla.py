@@ -232,13 +232,20 @@ def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline
             MINIMUM_VIEWS = int(N_VIEWS * RATIO)  # minimum number of views to consider a gaussian as close to the object
 
             mask_triangles = TRIANGLES_VIEW_COUNTER >= MINIMUM_VIEWS
-            mask_triangles_idx = mask_triangles.nonzero().flatten()
             print("Number of triangles that are close to the object: ", mask_triangles.sum())
+
+            mask_triangles = mask_triangles.cpu().numpy()
+            masked_mesh = scene_mesh.submesh([mask_triangles], append=True)
+            convex_hull = masked_mesh.convex_hull
+            original_tri_centroids = scene_mesh.triangles_center
+            inside_hull = convex_hull.contains(original_tri_centroids)
+            mask_triangles = np.logical_or(mask_triangles, inside_hull)
+            mask_triangles_idx = np.where(mask_triangles)[0]
 
             # keep the gaussians with closest triangle index in mask_triangles_idx
             ### mask_trianlges_idx: the index of triangles that are close to the object
             ### triangle_ids: the index of the closest triangle of each gaussian
-            mask3d = np.isin(triangle_ids, mask_triangles_idx.cpu().numpy())
+            mask3d = np.isin(triangle_ids, mask_triangles_idx)
             mask3d = torch.tensor(mask3d, dtype=torch.bool, device="cuda")
             print("Number of gaussians that are close to the object: ", mask3d.sum())
 
@@ -269,7 +276,7 @@ def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline
                 view = customLoadCam(-1, idx, cam_info)
                 results = render(view, object_gaussians, pipeline, background)
                 object_alpha_image = results["render"].permute(1, 2, 0)[:, :, 3].cpu().numpy()
-                object_mask_rendered = object_alpha_image >= 0.5
+                object_mask_rendered = object_alpha_image >= 0.8
                 object_mask_tracking = np.array(obj_masks[list(obj_masks.keys())[idx]]) == 255
                 # compute the number of pixels mismatched by XOR operation
                 xor_mask = np.logical_xor(object_mask_rendered, object_mask_tracking)
@@ -295,8 +302,15 @@ def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline
 
         MINIMUM_VIEWS = int(N_VIEWS * best_ratio)  # minimum number of views to consider a gaussian as close to the object
         mask_triangles = TRIANGLES_VIEW_COUNTER >= MINIMUM_VIEWS
-        mask_triangles_idx = mask_triangles.nonzero().flatten()
-        mask3d = np.isin(triangle_ids, mask_triangles_idx.cpu().numpy())
+        # mask_triangles_idx = mask_triangles.nonzero().flatten().cpu().numpy()
+        mask_triangles = mask_triangles.cpu().numpy()
+        masked_mesh = scene_mesh.submesh([mask_triangles], append=True)
+        convex_hull = masked_mesh.convex_hull
+        original_tri_centroids = scene_mesh.triangles_center
+        inside_hull = convex_hull.contains(original_tri_centroids)
+        mask_triangles = np.logical_or(mask_triangles, inside_hull)
+        mask_triangles_idx = np.where(mask_triangles)[0]
+        mask3d = np.isin(triangle_ids, mask_triangles_idx)
         mask3d = torch.tensor(mask3d, dtype=torch.bool, device="cuda")
 
         # save the selected object gaussians for further usage
