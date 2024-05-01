@@ -11,4 +11,5 @@ python extract_meshes_vanilla.py \
     --model_path ./output/garden_norm_vase_with_flowers \
     --custom_traj_name transforms_001 \
     --load_iteration 60000 \
-    --selected_obj_ids 1
+    --selected_obj_ids 1 \
+    --OBJECT_NAME vase_with_flowers

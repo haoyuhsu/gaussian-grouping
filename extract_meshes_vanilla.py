@@ -128,7 +128,7 @@ def get_ray_directions(H, W, K, device='cpu', random=False, return_uv=False, fla
     return directions
 
 
-def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline : PipelineParams, custom_traj_name : str, selected_obj_ids : int, removal_thresh : float):
+def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline : PipelineParams, custom_traj_name : str, selected_obj_ids : int, removal_thresh : float, OBJECT_NAME : str):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
@@ -159,7 +159,7 @@ def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline
         c2w_dict = dict(sorted(c2w_dict.items()))
         
         # setting up tracking folder path
-        object_name = 'vase_with_flowers'
+        object_name = OBJECT_NAME
         deva_output_path = os.path.join(dataset.source_path, "custom_camera_path", custom_traj_name, 'track_with_deva')
         tracking_dir = os.path.join(deva_output_path, object_name)
 
@@ -171,7 +171,7 @@ def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline
             for file in os.listdir(obj_folder):
                 if file.endswith(".png"):
                     mask = cv2.imread(os.path.join(obj_folder, file), cv2.IMREAD_GRAYSCALE)
-                    kernel = np.ones((3, 3), np.uint8)     
+                    kernel = np.ones((3, 3), np.uint8)
                     mask = cv2.erode(mask, kernel, iterations=1)    # erode the mask to remove the noisy boundary
                     obj_masks[file] = mask
         else:
@@ -226,7 +226,7 @@ def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline
         torch.cuda.empty_cache()
         
         total_missed_pixels_list = []
-        RATIO_LIST = [0.25, 0.3, 0.32, 0.34, 0.36, 0.38, 0.4, 0.42, 0.44, 0.46, 0.48, 0.50]    # TODO: might use binary search to find the optimal ratio
+        RATIO_LIST = [0.25, 0.3, 0.32, 0.34, 0.36, 0.38, 0.4, 0.42, 0.44, 0.46, 0.48, 0.50, 0.55, 0.60, 0.65, 0.7]    # TODO: might use binary search to find the optimal ratio
         for RATIO in RATIO_LIST:
             print("===== RATIO: ", RATIO, "=====")
             MINIMUM_VIEWS = int(N_VIEWS * RATIO)  # minimum number of views to consider a gaussian as close to the object
@@ -313,12 +313,29 @@ def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline
         mask3d = np.isin(triangle_ids, mask_triangles_idx)
         mask3d = torch.tensor(mask3d, dtype=torch.bool, device="cuda")
 
-        # save the convex hull meshes (TODO: might be blurry)
-        masked_mesh.export(os.path.join(dataset.model_path, "point_cloud_removal", "object_mesh.obj")) 
-        convex_hull_mesh = trimesh.Trimesh(vertices=convex_hull.vertices, faces=convex_hull.faces)
-        convex_hull_mesh.export(os.path.join(dataset.model_path, "point_cloud_removal", "object_convex_hull_mesh.obj"))
+        save_dir = os.path.join(dataset.model_path, "object_instance", '_'.join(object_name.split(' ')))
+        os.makedirs(save_dir, exist_ok=True)
 
-        # save the selected object gaussians for further usage
+        # save the convex hull meshes (TODO: might be blurry)
+        # convex_hull_mesh_dir = os.path.join(save_dir, "convex_hull_mesh")
+        # os.makedirs(convex_hull_mesh_dir, exist_ok=True)
+        # convex_hull_mesh = trimesh.Trimesh(vertices=convex_hull.vertices, faces=convex_hull.faces)
+        # convex_hull_mesh.export(os.path.join(convex_hull_mesh_dir, "object_convex_hull_mesh.obj"))
+
+        # save object instance mesh
+        object_mesh_save_dir = os.path.join(save_dir, "object_mesh")
+        os.makedirs(object_mesh_save_dir, exist_ok=True)
+        object_instance_mesh = scene_mesh.submesh([mask_triangles], append=True)
+        object_instance_mesh.export(os.path.join(object_mesh_save_dir, "object_mesh.obj"))
+
+        # save the remaining scene mesh
+        scene_mesh_save_dir = os.path.join(save_dir, "removal_mesh")
+        os.makedirs(scene_mesh_save_dir, exist_ok=True)
+        non_mask_triangles = ~mask_triangles
+        scene_mesh_remaining = scene_mesh.submesh([non_mask_triangles], append=True)
+        scene_mesh_remaining.export(os.path.join(scene_mesh_save_dir, "removal_mesh.obj"))
+
+        # save object instance gaussians for further usage
         object_gaussians = copy.deepcopy(gaussians)
         object_gaussians._xyz = gaussians._xyz[mask3d]
         object_gaussians._features_dc = gaussians._features_dc[mask3d]
@@ -327,13 +344,7 @@ def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline
         object_gaussians._rotation = gaussians._rotation[mask3d]
         object_gaussians._opacity = gaussians._opacity[mask3d]
         object_gaussians._objects_dc = gaussians._objects_dc[mask3d]
-        object_point_cloud_path = os.path.join(dataset.model_path, "point_cloud_removal", "object_id={}".format(selected_obj_ids))
-        makedirs(object_point_cloud_path, exist_ok=True)
-        # print("Saving object point cloud to: ", object_point_cloud_path)
-        # object_gaussians.save_ply(os.path.join(object_point_cloud_path, "object_point_cloud.ply"))
-
-        if mask3d.nonzero().size(0) == 0:
-            return
+        object_gaussians.save_ply(os.path.join(save_dir, "object_gaussians.ply"))
 
         # save the remaining gaussians for further usage
         non_mask3d = ~mask3d
@@ -345,8 +356,7 @@ def extract_geometry_and_render(dataset : ModelParams, iteration : int, pipeline
         object_removal_gaussians._rotation = gaussians._rotation[non_mask3d]
         object_removal_gaussians._opacity = gaussians._opacity[non_mask3d]
         object_removal_gaussians._objects_dc = gaussians._objects_dc[non_mask3d]
-        # print("Saving filtered point cloud to: ", object_point_cloud_path)
-        # object_removal_gaussians.save_ply(os.path.join(object_point_cloud_path, "filtered_point_cloud.ply"))
+        object_removal_gaussians.save_ply(os.path.join(save_dir, "removal_gaussians.ply"))
 
         # recomposition of the scene (ex: plus 0.25 in x-axis for object gaussians)
         recomposed_gaussians = copy.deepcopy(gaussians)
@@ -398,10 +408,11 @@ if __name__ == "__main__":
     parser.add_argument("--load_iteration", type=int, default=0, help="Load a specific iteration from a checkpoint")
     parser.add_argument("--selected_obj_ids", type=int, default=-1, help="Object ids to be removed")
     parser.add_argument("--removal_thresh", type=float, default=0.5, help="Threshold for object removal")
+    parser.add_argument("--OBJECT_NAME", type=str, default="object", help="Object name to be removed")
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
 
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
-    extract_geometry_and_render(model.extract(args), args.iteration, pipeline.extract(args), args.custom_traj_name, args.selected_obj_ids, args.removal_thresh)
+    extract_geometry_and_render(model.extract(args), args.iteration, pipeline.extract(args), args.custom_traj_name, args.selected_obj_ids, args.removal_thresh, args.OBJECT_NAME)
